@@ -71,8 +71,8 @@ async def sync_events():
         if not event_id or not name or not start or not end:
             continue
 
-        if end <= now or start >= cutoff or end <= start:
-            continue
+        if start <= now or start >= cutoff or end <= start:
+    continue
 
         candidates.append({
             "id": str(event_id),
