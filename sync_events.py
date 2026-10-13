@@ -47,7 +47,7 @@ async def fetch_source_events():
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.get(EVENTS_URL) as response:
             response.raise_for_status()
-            data = await response.json()
+            data = await response.json(content_type=None)
 
     if not isinstance(data, list):
         raise ValueError("Unexpected event feed format")
