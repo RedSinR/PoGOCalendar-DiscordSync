@@ -1,6 +1,7 @@
 
 import os
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -66,19 +67,53 @@ async def fetch_source_events(session):
 async def discord_request(session, method, path, **kwargs):
     url = f"{DISCORD_API}{path}"
 
-    async with session.request(method, url, **kwargs) as response:
-        body = await response.text()
+    # Retry rate limits and temporary Discord server errors.
+    for attempt in range(10):
+        async with session.request(
+            method, url, **kwargs
+        ) as response:
+            body = await response.text()
+            status = response.status
 
-        if response.status < 200 or response.status >= 300:
+            if 200 <= status < 300:
+                return json.loads(body) if body else None
+
+            if status == 429:
+                try:
+                    error_data = json.loads(body)
+                    wait_seconds = float(
+                        error_data.get("retry_after", 5)
+                    )
+                except (ValueError, TypeError):
+                    wait_seconds = 5
+
+                wait_seconds = max(wait_seconds, 1) + 1
+
+                print(
+                    f"Discord rate limit reached. "
+                    f"Waiting {wait_seconds:.1f} seconds "
+                    f"(attempt {attempt + 1}/10)..."
+                )
+                await asyncio.sleep(wait_seconds)
+                continue
+
+            if status >= 500 and attempt < 9:
+                wait_seconds = min(2 ** attempt, 30)
+                print(
+                    f"Discord server error {status}. "
+                    f"Retrying in {wait_seconds} seconds..."
+                )
+                await asyncio.sleep(wait_seconds)
+                continue
+
             raise RuntimeError(
-                f"Discord API error {response.status}: {body}"
+                f"Discord API error {status}: {body}"
             )
 
-        if body:
-            import json
-            return json.loads(body)
-
-        return None
+    raise RuntimeError(
+        f"Discord request failed after repeated retries: "
+        f"{method} {path}"
+    )
 
 
 def get_marker(event):
@@ -101,7 +136,7 @@ async def sync_events():
         "User-Agent": "PoGOCalendarSync/1.0",
     }
 
-    timeout = aiohttp.ClientTimeout(total=60)
+    timeout = aiohttp.ClientTimeout(total=120)
 
     async with aiohttp.ClientSession(
         timeout=timeout,
@@ -126,20 +161,17 @@ async def sync_events():
             if start <= now or start >= cutoff or end <= start:
                 continue
 
-            link = item.get("link") or ""
-            event_type = (
-                item.get("heading")
-                or item.get("eventType")
-                or ""
-            )
-
             candidates.append({
                 "id": str(event_id),
                 "name": str(name)[:90],
                 "start": start,
                 "end": end,
-                "link": str(link),
-                "type": str(event_type),
+                "link": str(item.get("link") or ""),
+                "type": str(
+                    item.get("heading")
+                    or item.get("eventType")
+                    or ""
+                ),
             })
 
         candidates.sort(key=lambda event: event["start"])
@@ -156,8 +188,9 @@ async def sync_events():
             params={"with_user_count": "false"},
         )
 
-        # Only manage events carrying our unique marker.
+        # Manage only events carrying our unique source marker.
         managed = {}
+
         for event in existing:
             marker_id = get_marker(event)
             if marker_id is not None:
@@ -168,17 +201,13 @@ async def sync_events():
         for item in candidates:
             marker = event_marker(item["id"])
 
-            description_parts = [
+            description = "\n".join([
                 item["type"],
                 item["link"],
                 "",
                 marker,
                 "Event data: ScrapedDuck / LeekDuck",
-            ]
-
-            description = "\n".join(
-                part for part in description_parts if part is not None
-            )[:1000]
+            ])[:1000]
 
             event_name = f"{PREFIX} {item['name']}"[:100]
 
@@ -229,7 +258,7 @@ async def sync_events():
                 )
                 print(f"Created: {event_name}")
 
-        # Delete only events with our marker that are no longer wanted.
+        # Remove only our marked events no longer in the selected window.
         for marker_id, event in managed.items():
             if marker_id not in wanted_ids:
                 await discord_request(
@@ -237,7 +266,10 @@ async def sync_events():
                     "DELETE",
                     f"{path}/{event['id']}",
                 )
-                print(f"Removed old bot-managed event: {event.get('name')}")
+                print(
+                    f"Removed old bot-managed event: "
+                    f"{event.get('name')}"
+                )
 
         print("Sync completed successfully.")
 
