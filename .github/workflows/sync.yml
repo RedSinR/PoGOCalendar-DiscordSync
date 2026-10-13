@@ -1,0 +1,37 @@
+
+name: PoGO Discord Calendar Sync
+
+on:
+  schedule:
+    - cron: "0 10,11 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run sync at 3 AM Pacific
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_GUILD_ID: ${{ vars.DISCORD_GUILD_ID }}
+        run: |
+          HOUR=$(python -c "from datetime import datetime; from zoneinfo import ZoneInfo; print(datetime.now(ZoneInfo('America/Los_Angeles')).hour)")
+          if [ "$HOUR" = "3" ]; then
+            python sync_events.py
+          else
+            echo "Not 3 AM Pacific; skipping this scheduled check."
+          fi
