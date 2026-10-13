@@ -12,7 +12,7 @@ GUILD_ID = int(os.environ["DISCORD_GUILD_ID"])
 
 EVENTS_URL = (
     "https://raw.githubusercontent.com/"
-    "bigfoott/ScrapedDuck/data/data/events.json"
+    "bigfoott/ScrapedDuck/data/events.json"
 )
 
 TIMEZONE = ZoneInfo("America/Los_Angeles")
